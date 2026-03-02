@@ -23,13 +23,6 @@ public class ConnectionListener
     public MinecraftServer server;
     public int port;
 
-    public int GetNextConnectionCounter()
-    {
-        lock (_connectionCounterLock)
-        {
-            return _connectionCounter++;
-        }
-    }
     public ConnectionListener(MinecraftServer server, IPAddress address, int port, bool dualStack = false)
     {
         this.server = server;
@@ -55,6 +48,14 @@ public class ConnectionListener
         port = 0;
         open = true;
         _thread = null;
+    }
+
+    public int GetNextConnectionCounter()
+    {
+        lock (_connectionCounterLock)
+        {
+            return _connectionCounter++;
+        }
     }
 
     public void AddConnection(ServerPlayNetworkHandler connection)
