@@ -397,12 +397,6 @@ public class OverworldChunkGenerator : ChunkSource
 
         double horizontalScale = 684.412D;
         double verticalScale = 684.412D;
-        // Use the per-instance _biomeSource whose maps were populated by
-        // _biomeSource.GetBiomesInArea() in GetChunk() just before this call.
-        // Using world.getBiomeSource() here was wrong: parallel generator instances
-        // each have their own _biomeSource, and the world's shared biome source may
-        // be null (e.g. on world reload) or contain maps for a different chunk
-        // written by a concurrent thread.
         double[] temperatureBuffer = _biomeSource.TemperatureMap;
         double[] downfallBuffer = _biomeSource.DownfallMap;
         scaleNoiseBuffer = floatingIslandScale.create(scaleNoiseBuffer, x, z, sizeX, sizeZ, 1.121D, 1.121D, 0.5D);
