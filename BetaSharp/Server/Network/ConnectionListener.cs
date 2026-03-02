@@ -10,7 +10,7 @@ public class ConnectionListener
 {
     public Socket Socket { get; }
 
-    private readonly java.lang.Thread _thread;
+    private readonly AcceptConnectionThread? _thread;
     private readonly ILogger<ConnectionListener> _logger = Log.Instance.For<ConnectionListener>();
 
     public volatile bool open;
@@ -25,20 +25,23 @@ public class ConnectionListener
         this.server = server;
 
         Socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
-        Socket.DualMode = dualStack;
+        if (dualStack)
+        {
+            Socket.DualMode = true;
+        }
         Socket.Bind(new IPEndPoint(address, port));
         Socket.Listen();
 
         this.port = port;
         open = true;
         _thread = new AcceptConnectionThread(this, "Listen Thread");
-        _thread.start();
+        _thread.Start();
     }
 
     public ConnectionListener(MinecraftServer server)
     {
         this.server = server;
-        Socket = null;
+        Socket = null!;
         port = 0;
         open = true;
         _thread = null;

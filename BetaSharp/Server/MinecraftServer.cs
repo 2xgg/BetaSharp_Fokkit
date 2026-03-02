@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Threading;
 using BetaSharp.Network.Packets.S2CPlay;
 using BetaSharp.Server.Commands;
 using BetaSharp.Server.Entities;
@@ -7,16 +9,13 @@ using BetaSharp.Server.Worlds;
 using BetaSharp.Util.Maths;
 using BetaSharp.Worlds;
 using BetaSharp.Worlds.Storage;
-using java.lang;
-using java.util;
 using Microsoft.Extensions.Logging;
-using Exception = System.Exception;
 
 namespace BetaSharp.Server;
 
-public abstract class MinecraftServer : Runnable, CommandOutput
+public abstract class MinecraftServer : CommandOutput
 {
-    public HashMap GIVE_COMMANDS_COOLDOWNS = [];
+    public Dictionary<string, int> GIVE_COMMANDS_COOLDOWNS = [];
     public ConnectionListener connections;
     public IServerConfiguration config;
     public ServerWorld[] worlds;
@@ -27,7 +26,8 @@ public abstract class MinecraftServer : Runnable, CommandOutput
     private int ticks;
     public string progressMessage;
     public int progress;
-    private List pendingCommands = Collections.synchronizedList(new ArrayList());
+    private readonly List<Command> _pendingCommands = [];
+    private readonly object _pendingCommandsLock = new();
     public EntityTracker[] entityTrackers = new EntityTracker[2];
     public bool onlineMode;
     public bool spawnAnimals;
@@ -76,19 +76,19 @@ public abstract class MinecraftServer : Runnable, CommandOutput
         playerManager = CreatePlayerManager();
         entityTrackers[0] = new EntityTracker(this, 0);
         entityTrackers[1] = new EntityTracker(this, -1);
-        long startTime = java.lang.System.nanoTime();
+        long startTimestamp = Stopwatch.GetTimestamp();
         string worldName = config.GetLevelName("world");
         string seedString = config.GetLevelSeed("");
-        long seed = new java.util.Random().nextLong();
+        long seed = Random.Shared.NextInt64();
         if (seedString.Length > 0)
         {
             try
             {
-                seed = Long.parseLong(seedString);
+                seed = long.Parse(seedString);
             }
-            catch (NumberFormatException)
+            catch (FormatException)
             {
-                // Java based string hashing
+                // Java-compatible string hashing
                 int hash = 0;
                 foreach (char c in seedString)
                 {
@@ -99,11 +99,12 @@ public abstract class MinecraftServer : Runnable, CommandOutput
         }
 
         _logger.LogInformation($"Preparing level \"{worldName}\"");
-        loadWorld(new RegionWorldStorageSource(getFile(".").getAbsolutePath()), worldName, seed);
+        loadWorld(new RegionWorldStorageSource(GetFilePath(".")), worldName, seed);
 
         if (logHelp)
         {
-            _logger.LogInformation($"Done ({java.lang.System.nanoTime() - startTime}ns)! For help, type \"help\" or \"?\"");
+            long elapsedNs = (long)((Stopwatch.GetTimestamp() - startTimestamp) * (1_000_000_000.0 / Stopwatch.Frequency));
+            _logger.LogInformation($"Done ({elapsedNs}ns)! For help, type \"help\" or \"?\"");
         }
 
         return true;
@@ -112,7 +113,7 @@ public abstract class MinecraftServer : Runnable, CommandOutput
     private void loadWorld(IWorldStorageSource storageSource, string worldDir, long seed)
     {
         worlds = new ServerWorld[2];
-        RegionWorldStorage worldStorage = new RegionWorldStorage(getFile(".").getAbsolutePath(), worldDir, true);
+        RegionWorldStorage worldStorage = new RegionWorldStorage(GetFilePath("."), worldDir, true);
 
         for (int i = 0; i < worlds.Length; i++)
         {
@@ -298,7 +299,7 @@ public abstract class MinecraftServer : Runnable, CommandOutput
                         _lastTpsTime = tpsNow;
                     }
 
-                    java.lang.Thread.sleep(1L);
+                    Thread.Sleep(1);
                 }
             }
             else
@@ -306,15 +307,7 @@ public abstract class MinecraftServer : Runnable, CommandOutput
                 while (running)
                 {
                     runPendingCommands();
-
-                    try
-                    {
-                        java.lang.Thread.sleep(10L);
-                    }
-                    catch (InterruptedException ex)
-                    {
-                        ex.printStackTrace();
-                    }
+                    Thread.Sleep(10);
                 }
             }
         }
@@ -325,15 +318,7 @@ public abstract class MinecraftServer : Runnable, CommandOutput
             while (running)
             {
                 runPendingCommands();
-
-                try
-                {
-                    java.lang.Thread.sleep(10L);
-                }
-                catch (InterruptedException interruptedEx)
-                {
-                    interruptedEx.printStackTrace();
-                }
+                Thread.Sleep(10);
             }
         }
         finally
@@ -343,9 +328,9 @@ public abstract class MinecraftServer : Runnable, CommandOutput
                 shutdown();
                 stopped = true;
             }
-            catch (Throwable ex)
+            catch (Exception ex)
             {
-                ex.printStackTrace();
+                _logger.LogError(ex, "Error during shutdown");
             }
             finally
             {
@@ -359,27 +344,23 @@ public abstract class MinecraftServer : Runnable, CommandOutput
 
     private void tick()
     {
-        ArrayList completeCooldowns = [];
+        List<string> completeCooldowns = [];
 
-        var keys = GIVE_COMMANDS_COOLDOWNS.keySet();
-        var iter = keys.iterator();
-        while (iter.hasNext())
+        foreach (string key in GIVE_COMMANDS_COOLDOWNS.Keys.ToList())
         {
-            string key = (string)iter.next();
-            int cooldown = (int)GIVE_COMMANDS_COOLDOWNS.get(key);
-            if (cooldown > 0)
+            if (GIVE_COMMANDS_COOLDOWNS[key] > 0)
             {
-                GIVE_COMMANDS_COOLDOWNS.put(key, cooldown - 1);
+                GIVE_COMMANDS_COOLDOWNS[key]--;
             }
             else
             {
-                completeCooldowns.add(key);
+                completeCooldowns.Add(key);
             }
         }
 
-        for (int i = 0; i < completeCooldowns.size(); i++)
+        foreach (string key in completeCooldowns)
         {
-            GIVE_COMMANDS_COOLDOWNS.remove(completeCooldowns.get(i));
+            GIVE_COMMANDS_COOLDOWNS.Remove(key);
         }
 
         ticks++;
@@ -427,18 +408,28 @@ public abstract class MinecraftServer : Runnable, CommandOutput
 
     public void queueCommands(string str, CommandOutput cmd)
     {
-        pendingCommands.add(new Command(str, cmd));
+        lock (_pendingCommandsLock)
+        {
+            _pendingCommands.Add(new Command(str, cmd));
+        }
     }
 
     public void runPendingCommands()
     {
-        while (pendingCommands.size() > 0)
+        while (true)
         {
-            commandHandler.ExecuteCommand((Command)pendingCommands.remove(0));
+            Command cmd;
+            lock (_pendingCommandsLock)
+            {
+                if (_pendingCommands.Count == 0) break;
+                cmd = _pendingCommands[0];
+                _pendingCommands.RemoveAt(0);
+            }
+            commandHandler.ExecuteCommand(cmd);
         }
     }
 
-    public abstract java.io.File getFile(string path);
+    public abstract string GetFilePath(string path);
 
     public void SendMessage(string message)
     {

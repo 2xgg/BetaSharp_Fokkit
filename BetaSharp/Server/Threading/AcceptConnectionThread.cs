@@ -5,17 +5,25 @@ using Microsoft.Extensions.Logging;
 
 namespace BetaSharp.Server.Threading;
 
-internal class AcceptConnectionThread : java.lang.Thread
+internal class AcceptConnectionThread
 {
     private readonly ILogger<AcceptConnectionThread> _logger = Log.Instance.For<AcceptConnectionThread>();
     private readonly ConnectionListener _listener;
+    private readonly Thread _thread;
 
-    public AcceptConnectionThread(ConnectionListener listener, string name) : base(name)
+    public AcceptConnectionThread(ConnectionListener listener, string name)
     {
         _listener = listener;
+        _thread = new Thread(Run)
+        {
+            Name = name,
+            IsBackground = true
+        };
     }
 
-    public override void run()
+    public void Start() => _thread.Start();
+
+    private void Run()
     {
         Dictionary<IPAddress, long> map = [];
 
