@@ -44,8 +44,12 @@ public class PlayerManager
 
     public void updatePlayerAfterDimensionChange(ServerPlayerEntity player)
     {
-        _chunkMaps[0].removePlayer(player);
-        _chunkMaps[1].removePlayer(player);
+        // Removal from the source chunk map is handled by sendPlayerToDimension
+        // *before* coordinates are scaled, so the correct source-space chunks are
+        // unloaded.  Clear any leftover entries here as a safety net so the new
+        // dimension's addPlayer always sends ChunkStatusUpdateS2CPacket(true) for
+        // every nether chunk, regardless of coordinate overlap with the old set.
+        player.activeChunks.Clear();
         GetChunkMap(player.dimensionId).addPlayer(player);
         ServerWorld var2 = _server.getWorld(player.dimensionId);
         var2.chunkCache.LoadChunk((int)player.x >> 4, (int)player.z >> 4);
@@ -209,13 +213,21 @@ public class PlayerManager
 
     public void sendPlayerToDimension(ServerPlayerEntity player, int targetDim)
     {
-        ServerWorld currentWorld = _server.getWorld(player.dimensionId);
+        int sourceDim = player.dimensionId;
+        ServerWorld currentWorld = _server.getWorld(sourceDim);
         ServerWorld targetWorld = _server.getWorld(targetDim);
 
         if (targetWorld == null)
         {
             return;
         }
+
+        // Remove from source chunk map NOW, while player.x/z are still in
+        // source-dimension space.  If we waited until after coordinate scaling
+        // the wrong (already-scaled) position would be used to locate tracked
+        // chunks, leaving old overworld TrackedChunk entries orphaned and
+        // polluting player.activeChunks with stale positions.
+        GetChunkMap(sourceDim).removePlayer(player);
 
         player.dimensionId = targetDim;
         player.networkHandler.sendPacket(new PlayerRespawnPacket((sbyte)player.dimensionId));
@@ -254,6 +266,14 @@ public class PlayerManager
             targetWorld.chunkCache.forceLoad = true;
             new PortalForcer().MoveToPortal(targetWorld, player);
             targetWorld.chunkCache.forceLoad = false;
+
+            // Fully drain lighting updates generated during portal chunk
+            // creation before the chunks are queued for the client.  The
+            // per-tick lighting budget cap in MinecraftServer.tick() means
+            // these would otherwise trickle in over several ticks, causing
+            // chunks to arrive at the client with incorrect (dark) lighting
+            // until a block update forces a local recalculation.
+            while (targetWorld.doLightingUpdates()) { }
         }
 
         updatePlayerAfterDimensionChange(player);

@@ -411,7 +411,13 @@ public abstract class MinecraftServer : Runnable, CommandOutput
 
                 world.Tick();
 
-                while (world.doLightingUpdates())
+                // Cap lighting updates to avoid spending the entire tick (and beyond)
+                // draining the queue.  The nether's lava seas can generate thousands
+                // of lighting entries per tick; processing them all in one go causes
+                // >2-second stalls and "Can't keep up" spam.  Any remaining work
+                // carries over and is processed across subsequent ticks.
+                var lightSw = Stopwatch.StartNew();
+                while (lightSw.ElapsedMilliseconds < 15L && world.doLightingUpdates())
                 {
                 }
 
